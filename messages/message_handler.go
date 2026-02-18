@@ -2,10 +2,10 @@ package messages
 
 import (
 	"encoding/binary"
+	"google.golang.org/protobuf/proto"
 	"log"
 	"net"
-
-	"google.golang.org/protobuf/proto"
+	"time"
 )
 
 type MessageHandler struct {
@@ -137,4 +137,12 @@ func (m *MessageHandler) ReceiveRetrievalResponse() (bool, string, uint64, []byt
 	rr := resp.GetRetrievalResp().GetResp()
 	log.Println(rr.Message)
 	return rr.Ok, rr.Message, resp.GetRetrievalResp().Size, resp.GetRetrievalResp().Checksum
+}
+
+func (m *MessageHandler) SetReadDeadline(t uint64) {
+	m.conn.SetReadDeadline(time.Now().Add(time.Duration(t) * time.Second))
+}
+
+func (m *MessageHandler) SetWriteDeadline(t uint64) {
+	m.conn.SetWriteDeadline(time.Now().Add(time.Duration(t) * time.Second))
 }
