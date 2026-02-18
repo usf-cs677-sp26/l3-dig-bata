@@ -5,6 +5,8 @@ import (
 	"reflect"
 )
 
+const MinAcceptedBps = 1048576 // 1 MiB/s
+
 func VerifyChecksum(serverCheck []byte, clientCheck []byte) bool {
 	log.Printf("Server checksum: %x\n", serverCheck)
 	log.Printf("Client checksum: %x\n", clientCheck)
@@ -15,4 +17,9 @@ func VerifyChecksum(serverCheck []byte, clientCheck []byte) bool {
 		log.Println("Checksums DO NOT match")
 		return false
 	}
+}
+
+func DeadlineSeconds(size uint64) uint64 {
+	timeoutSeconds := max(size / MinAcceptedBps, 1)
+	return timeoutSeconds
 }
