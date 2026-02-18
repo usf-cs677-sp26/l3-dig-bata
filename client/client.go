@@ -13,6 +13,7 @@ import (
 )
 
 func put(msgHandler *messages.MessageHandler, fileName string) int {
+
 	fmt.Println("PUT", fileName)
 
 	// Get file size and make sure it exists
@@ -21,20 +22,22 @@ func put(msgHandler *messages.MessageHandler, fileName string) int {
 		log.Fatalln(err)
 	}
 
+	file, _ := os.Open(fileName)
+	md5 := md5.New()
+	io.Copy(md5, file) // Checksum and transfer file at same time
+	file.Close()
+	checksum := md5.Sum(nil)
+
 	// Tell the server we want to store this file
-	msgHandler.SendStorageRequest(fileName, uint64(info.Size()))
+	msgHandler.SendStorageRequest(fileName, uint64(info.Size()), checksum)
 	if ok, _ := msgHandler.ReceiveResponse(); !ok {
 		return 1
 	}
 
-	file, _ := os.Open(fileName)
-	md5 := md5.New()
-	w := io.MultiWriter(msgHandler, md5)
-	io.CopyN(w, file, info.Size()) // Checksum and transfer file at same time
+	file, _ = os.Open(fileName)
+	io.CopyN(msgHandler, file, info.Size())
 	file.Close()
 
-	checksum := md5.Sum(nil)
-	msgHandler.SendChecksumVerification(checksum)
 	if ok, _ := msgHandler.ReceiveResponse(); !ok {
 		return 1
 	}
@@ -46,15 +49,15 @@ func put(msgHandler *messages.MessageHandler, fileName string) int {
 func get(msgHandler *messages.MessageHandler, fileName string) int {
 	fmt.Println("GET", fileName)
 
-	file, err := os.OpenFile(fileName, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0666)
-	if err != nil {
-		log.Println(err)
+	msgHandler.SendRetrievalRequest(fileName)
+	ok, _, size, serverCheck := msgHandler.ReceiveRetrievalResponse()
+	if !ok {
 		return 1
 	}
 
-	msgHandler.SendRetrievalRequest(fileName)
-	ok, _, size := msgHandler.ReceiveRetrievalResponse()
-	if !ok {
+	file, err := os.OpenFile(fileName, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0666)
+	if err != nil {
+		log.Println(err)
 		return 1
 	}
 
@@ -64,8 +67,6 @@ func get(msgHandler *messages.MessageHandler, fileName string) int {
 	file.Close()
 
 	clientCheck := md5.Sum(nil)
-	checkMsg, _ := msgHandler.Receive()
-	serverCheck := checkMsg.GetChecksum().Checksum
 
 	if util.VerifyChecksum(serverCheck, clientCheck) {
 		log.Println("Successfully retrieved file.")

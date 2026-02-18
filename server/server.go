@@ -57,11 +57,8 @@ func handleStorage(msgHandler *messages.MessageHandler, request *messages.Storag
 
 	serverCheck := md5.Sum(nil)
 
-	clientCheckMsg, _ := msgHandler.Receive()
-	clientCheck := clientCheckMsg.GetChecksum().Checksum
-
 	// 5. Verify its checksum against the checksum sent by the client
-	if util.VerifyChecksum(serverCheck, clientCheck) {
+	if util.VerifyChecksum(serverCheck, request.Checksum) {
 		log.Println("Successfully stored file.")
 		msgHandler.SendResponse(true, "Successfully stored file.")
 	} else {
@@ -85,17 +82,18 @@ func handleRetrieval(msgHandler *messages.MessageHandler, request *messages.Retr
 		return
 	}
 
-	// 2. Send a response back to the client with the file's size and checksum
-	msgHandler.SendRetrievalResponse(true, "Ready to send", uint64(info.Size()))
-
 	file, _ := os.Open(request.FileName)
 	md5 := md5.New()
-	w := io.MultiWriter(msgHandler, md5)
-	io.CopyN(w, file, info.Size()) // Checksum and transfer file at same time
+	io.Copy(md5, file) // Checksum and transfer file at same time
 	file.Close()
 
 	checksum := md5.Sum(nil)
-	msgHandler.SendChecksumVerification(checksum)
+
+	msgHandler.SendRetrievalResponse(true, "Ready to send", uint64(info.Size()), checksum)
+
+	file, _ = os.Open(request.FileName)
+	io.CopyN(msgHandler, file, info.Size())
+	file.Close()
 
 	// Disconnect the client when the transfer is complete
 	msgHandler.Close()
