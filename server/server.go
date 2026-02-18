@@ -9,10 +9,36 @@ import (
 	"log"
 	"net"
 	"os"
+	"syscall"
 )
+
+func spaceAvailable(request *messages.StorageRequest) bool {
+
+	var stat syscall.Statfs_t
+	syscall.Statfs(".", &stat)
+	avail := stat.Bavail * uint64(stat.Bsize)
+	//fmt.Printf("diskspace: %d\n", avail)
+
+	size := uint64(request.Size)
+
+	if size > avail {
+		return false
+	}
+
+	return true
+}
 
 func handleStorage(msgHandler *messages.MessageHandler, request *messages.StorageRequest) {
 	log.Println("Attempting to store", request.FileName)
+
+	// 2. Ensure there is enough space avail. on the disk
+	if !spaceAvailable(request) {
+		msgHandler.SendResponse(false, "Not enough disk space.")
+		msgHandler.Close()
+		return
+	}
+
+	// 1. Make sure the file doesn't already existe
 	file, err := os.OpenFile(request.FileName, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0666)
 	if err != nil {
 		msgHandler.SendResponse(false, err.Error())
@@ -20,7 +46,10 @@ func handleStorage(msgHandler *messages.MessageHandler, request *messages.Storag
 		return
 	}
 
+	// 3. Send an "OK" response to the client so it knows it can begin sending the file
 	msgHandler.SendResponse(true, "Ready for data")
+
+	// 4. Receive the data and store (write) the file
 	md5 := md5.New()
 	w := io.MultiWriter(file, md5)
 	io.CopyN(w, msgHandler, int64(request.Size)) /* Write and checksum as we go */
@@ -31,11 +60,18 @@ func handleStorage(msgHandler *messages.MessageHandler, request *messages.Storag
 	clientCheckMsg, _ := msgHandler.Receive()
 	clientCheck := clientCheckMsg.GetChecksum().Checksum
 
+	// 5. Verify its checksum against the checksum sent by the client
 	if util.VerifyChecksum(serverCheck, clientCheck) {
 		log.Println("Successfully stored file.")
+		msgHandler.SendResponse(true, "Successfully stored file.")
 	} else {
 		log.Println("FAILED to store file. Invalid checksum.")
+		msgHandler.SendResponse(false, "FAILED to store file. Invalid checksum.")
 	}
+
+	// 6. Respond to the client with the status of the tranfer
+	// 7. Disconnect the client
+	msgHandler.Close()
 }
 
 func handleRetrieval(msgHandler *messages.MessageHandler, request *messages.RetrievalRequest) {
@@ -44,9 +80,12 @@ func handleRetrieval(msgHandler *messages.MessageHandler, request *messages.Retr
 	// Get file size and make sure it exists
 	info, err := os.Stat(request.FileName)
 	if err != nil {
-		log.Fatalln(err)
+		msgHandler.SendResponse(false, err.Error())
+		msgHandler.Close()
+		return
 	}
 
+	// 2. Send a response back to the client with the file's size and checksum
 	msgHandler.SendRetrievalResponse(true, "Ready to send", uint64(info.Size()))
 
 	file, _ := os.Open(request.FileName)
@@ -57,6 +96,9 @@ func handleRetrieval(msgHandler *messages.MessageHandler, request *messages.Retr
 
 	checksum := md5.Sum(nil)
 	msgHandler.SendChecksumVerification(checksum)
+
+	// Disconnect the client when the transfer is complete
+	msgHandler.Close()
 }
 
 func handleClient(msgHandler *messages.MessageHandler) {
@@ -66,6 +108,7 @@ func handleClient(msgHandler *messages.MessageHandler) {
 		wrapper, err := msgHandler.Receive()
 		if err != nil {
 			log.Println(err)
+			return
 		}
 
 		switch msg := wrapper.Msg.(type) {
