@@ -46,24 +46,32 @@ func put(msgHandler *messages.MessageHandler, fileName string) int {
 	return 0
 }
 
-func get(msgHandler *messages.MessageHandler, fileName string) int {
+func get(msgHandler *messages.MessageHandler, fileName string, dir string) int {
+
+	filePath := dir + "/" + fileName
+
 	fmt.Println("GET", fileName)
 
-	msgHandler.SendRetrievalRequest(fileName)
-	ok, _, size, serverCheck := msgHandler.ReceiveRetrievalResponse()
-	if !ok {
-		return 1
-	}
-
-	file, err := os.OpenFile(fileName, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0666)
+	file, err := os.OpenFile(filePath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0666)
 	if err != nil {
 		log.Println(err)
 		return 1
 	}
 
+	msgHandler.SendRetrievalRequest(fileName)
+	ok, msg, size, serverCheck := msgHandler.ReceiveRetrievalResponse()
+	if !ok {
+		file.Close()
+		os.Remove(filePath)
+		log.Fatalln("FAILED retrieval request:", msg)
+	}
+
 	md5 := md5.New()
 	w := io.MultiWriter(file, md5)
-	io.CopyN(w, msgHandler, int64(size))
+	msgHandler.SetReadDeadline(util.DeadlineSeconds(size))
+	if _, err := io.CopyN(w, msgHandler, int64(size)); err != nil {
+		fmt.Println("Error receiving file:", err)
+	}
 	file.Close()
 
 	clientCheck := md5.Sum(nil)
@@ -71,6 +79,7 @@ func get(msgHandler *messages.MessageHandler, fileName string) int {
 	if util.VerifyChecksum(serverCheck, clientCheck) {
 		log.Println("Successfully retrieved file.")
 	} else {
+		os.Remove(filePath)
 		log.Println("FAILED to retrieve file. Invalid checksum.")
 	}
 
@@ -112,6 +121,6 @@ func main() {
 	if action == "put" {
 		os.Exit(put(msgHandler, fileName))
 	} else if action == "get" {
-		os.Exit(get(msgHandler, fileName))
+		os.Exit(get(msgHandler, fileName, dir))
 	}
 }
